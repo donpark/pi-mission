@@ -416,4 +416,24 @@ assert.deepEqual(mod.menuActions("dropped"), []);
 	await p.run;
 }
 
+// 8) cost contract: naming never touches the session model — when the bargain
+// model is missing, the capture text becomes the name even with ctx.model set
+{
+	let completeCalls = 0;
+	const expensiveCtx = {
+		sessionManager: { getSessionId: () => "test-session" },
+		model: { id: "expensive/model" },
+		modelRegistry: {
+			find: () => undefined,
+			complete: async () => {
+				completeCalls += 1;
+				return { content: [], usage: {} };
+			},
+		},
+	};
+	const r2 = await tool.execute("tc", { action: "add", capture: "burn no expensive tokens" }, undefined, () => {}, expensiveCtx);
+	assert.match(textOf(r2), /burn no expensive tokens \(named from capture\)/);
+	assert.equal(completeCalls, 0, "the session model is never called for naming");
+}
+
 console.log("pi-mission selftest: all assertions passed");

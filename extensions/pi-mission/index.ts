@@ -339,7 +339,11 @@ const generateName = async (
 	const fallback = capture.trim().slice(0, 80);
 	try {
 		const [provider, ...rest] = NAME_MODEL_ID.split("/");
-		const model = ctx.modelRegistry.find(provider, rest.join("/")) ?? ctx.model;
+		// Only the bargain-tier model is used — never fall back to the session
+		// model: on an expensive model, naming must not burn its tokens. No model
+		// found means the cleaned capture becomes the name.
+		const model = ctx.modelRegistry.find(provider, rest.join("/"));
+		if (!model) return { title: fallback };
 		if (!model) return { title: fallback };
 		const response = await ctx.modelRegistry.complete(model, {
 			systemPrompt:
@@ -349,7 +353,7 @@ const generateName = async (
 				role: "user",
 				content: [{
 					type: "text",
-					text: `Raw capture:\n${capture}\n\nExisting task names:\n${existing.join("\n") || "(none)"}`,
+					text: `Raw capture:\n${capture}\n\nExisting task names:\n${existing.slice(-12).join("\n") || "(none)"}`,
 				}],
 				timestamp: Date.now(),
 			}],
