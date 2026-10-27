@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/donpark/pi-mission.git"
   },
-  "files": ["extensions", "skills", "README.md", "LICENSE"],
+  "files": ["extensions", "skills", "docs", "README.md", "LICENSE"],
   "pi": {
     "extensions": ["./extensions/pi-mission/index.ts"],
     "skills": ["./skills/mission"]

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="849" height="370" viewBox="0 0 849 370" font-family="ui-monospace, SF Mono, Menlo, Consolas, monospace" font-size="13">
+<rect x="0" y="0" width="849" height="370" rx="10" fill="#0d1117" stroke="#30363d"/>
+<path d="M0 10 A10 10 0 0 1 10 0 H839 A10 10 0 0 1 849 10 V38 H0 Z" fill="#161b22"/>
+<line x1="0" y1="38" x2="849" y2="38" stroke="#30363d"/>
+<circle cx="22" cy="19" r="6" fill="#ff5f57"/>
+<circle cx="42" cy="19" r="6" fill="#febc2e"/>
+<circle cx="62" cy="19" r="6" fill="#28c840"/>
+<text x="424.5" y="23.5" text-anchor="middle" fill="#6e7681">don@mac — pi — /mission</text>
+<text x="18" y="65" xml:space="preserve"><tspan fill="#30363d">────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
+<text x="18" y="103" xml:space="preserve"><tspan fill="#58a6ff" font-weight="600"> mission: 1 done · 1 active · 3 remaining                                                               </tspan></text>
+<text x="18" y="141" xml:space="preserve"><tspan fill="#8b949e">  ＋ add task</tspan><tspan fill="#6e7681">   record a rabbit hole the moment it appears</tspan></text>
+<rect x="8" y="147" width="833" height="19" rx="4" fill="#161b22"/>
+<text x="18" y="160" xml:space="preserve"><tspan fill="#79c0ff" font-weight="600">→ ● #2 Ship pi-mission to npm (high) (started 14:18)  high  subtasks 0/2  started 14:18</tspan></text>
+<text x="18" y="179" xml:space="preserve"><tspan fill="#8b949e"></tspan><tspan fill="#6e7681">   ○ #3 Write the gallery README                    subtask of #2</tspan></text>
+<text x="18" y="198" xml:space="preserve"><tspan fill="#8b949e"></tspan><tspan fill="#6e7681">   ○ #4 Tag v0.1.0 and publish                      subtask of #2</tspan></text>
+<text x="18" y="217" xml:space="preserve"><tspan fill="#8b949e">  ○ #1 Investigate mac app hang-up crash</tspan></text>
+<text x="18" y="236" xml:space="preserve"><tspan fill="#8b949e">  ○ #5 Measure disk after killing daemons (after #1)  after #1</tspan></text>
+<text x="18" y="255" xml:space="preserve"><tspan fill="#8b949e">  ○ #7 Fix footer widget rendering glitch</tspan></text>
+<text x="18" y="274" xml:space="preserve"><tspan fill="#3fb950">  ✓ #6 Diagnose phone battery drain (14:18)</tspan><tspan fill="#6e7681">   14:18</tspan></text>
+<text x="18" y="312" xml:space="preserve"><tspan fill="#484f58"> type to filter • ↑↓/mouse move • ←/→ fold/unfold • ⌃o view • ⌃s sort • enter act • esc clear/close     </tspan></text>
+<text x="18" y="350" xml:space="preserve"><tspan fill="#30363d">────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan></text>
+</svg>
