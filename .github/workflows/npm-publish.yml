@@ -5,6 +5,7 @@ name: npm publish
 # with publish rights for pi-mission).
 
 on:
+  workflow_dispatch:
   push:
     tags: ["v*"]
 
@@ -27,6 +28,9 @@ jobs:
 
       - name: Self-test
         run: node extensions/pi-mission/selftest.mjs
+
+      - name: Token check (diagnostic, never blocks)
+        run: npm whoami || true
 
       - name: Tag must match package.json version
         run: |
