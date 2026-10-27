@@ -39,6 +39,8 @@ interface Task {
 	/** Ids that must be done first. */
 	dependsOn: number[];
 	createdAt: number;
+	/** Last mutation (any action) — the recency signal for "what is current". */
+	updatedAt?: number;
 	startedAt?: number;
 	doneAt?: number;
 }
@@ -453,7 +455,32 @@ class MissionPopup {
 		selectList.onSelectionChange = (item) => {
 			this.selectedValue = item.value;
 		};
-		const keep = items.findIndex((i) => i.value === this.selectedValue);
+		// Open on the current task: the most recently touched active one (a stale
+		// active is the known failure mode, so recency decides among them), else
+		// the most recently touched one, else the add row. A selection hidden by a
+		// fold snaps to its group row so ← then → can always unfold again.
+		let target = this.selectedValue;
+		if (target === null) {
+			const tasksInRows = popupRows(this.tasks, this.view, this.folded, this.sort)
+				.map((r) => r.task)
+				.filter((t): t is Task => t !== undefined);
+			const recency = (t: Task) => t.updatedAt ?? t.createdAt;
+			const active = tasksInRows.filter((t) => t.status === "active");
+			const pool = active.length > 0 ? active : tasksInRows;
+			const current = pool.reduce<Task | undefined>(
+				(a, t) => (!a || recency(t) > recency(a) ? t : a),
+				undefined,
+			);
+			target = current ? `t${current.id}` : "__add__";
+			this.selectedValue = target;
+		}
+		let keep = items.findIndex((i) => i.value === target);
+		if (keep < 0 && target.startsWith("t")) {
+			const t = findTask(this.tasks, Number(target.slice(1)));
+			const group = t ? `t${t.parent ?? t.id}` : "__add__";
+			keep = items.findIndex((i) => i.value === group);
+			if (keep >= 0) this.selectedValue = group;
+		}
 		if (keep > 0) selectList.setSelectedIndex(keep);
 		container.addChild(selectList);
 		container.addChild(new Text(th.fg("dim", "type to filter • ↑↓/mouse move • ←/→ fold/unfold • ⌃o view • ⌃s sort • enter act • esc clear/close")));
@@ -573,8 +600,10 @@ class MissionPopup {
 		if (matchesKey(data, "home")) return jump(0);
 		if (matchesKey(data, "end")) return jump(this.items.length - 1);
 		// Typing filters. decodeKittyPrintable covers kitty-protocol terminals
-		// (Ghostty sends letters as CSI-u sequences).
-		const ch = decodeKittyPrintable(data) ?? (data.length === 1 && data >= " " ? data : undefined);
+		// (Ghostty sends letters as CSI-u sequences); a whole printable chunk
+		// covers coalesced typing and non-bracketed paste.
+		const printable = (s: string) => s.length > 0 && [...s].every((c) => c >= " " && c !== "\x7f");
+		const ch = decodeKittyPrintable(data) ?? (printable(data) ? data : undefined);
 		if (ch !== undefined) {
 			this.filter += ch;
 			this.rebuild();
@@ -745,6 +774,7 @@ export default function (pi: ExtensionAPI) {
 					if (reaches(tasks, t.id, d)) return `prerequisite #${d} would create a dependency cycle`;
 				}
 				t.dependsOn = [...new Set(deps)];
+				t.updatedAt = Date.now();
 				return undefined;
 			};
 
@@ -774,6 +804,7 @@ export default function (pi: ExtensionAPI) {
 						parent: parent ? parent.id : null,
 						dependsOn: [],
 						createdAt: Date.now(),
+						updatedAt: Date.now(),
 					};
 					const err = setDeps(task, params.depends_on ?? []);
 					if (err) {
@@ -804,6 +835,7 @@ export default function (pi: ExtensionAPI) {
 						return snapshot("prio", "Error: priority required (high/normal/low)", "priority required");
 					}
 					t.priority = params.priority;
+					t.updatedAt = Date.now();
 					persist(_ctx);
 					return snapshot("prio", `Task #${t.id} priority set to ${params.priority}`);
 				}
@@ -816,6 +848,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					t.status = "active";
 					t.startedAt = t.startedAt ?? Date.now();
+					t.updatedAt = Date.now();
 					if (t.parent !== null) {
 						const parent = findTask(tasks, t.parent);
 						if (parent && parent.status === "pending") {
@@ -835,6 +868,7 @@ export default function (pi: ExtensionAPI) {
 					if (t.status === "done") return snapshot("done", `Task #${t.id} is already done`);
 					t.status = "done";
 					t.doneAt = Date.now();
+					t.updatedAt = Date.now();
 					persist(_ctx);
 					const open = tasks.filter((s) => s.parent === t.id && s.status !== "done" && s.status !== "dropped");
 					const note = open.length > 0 ? ` — note: open subtasks ${open.map((s) => `#${s.id}`).join(",")}` : "";
@@ -845,6 +879,7 @@ export default function (pi: ExtensionAPI) {
 					const t = params.id !== undefined ? findTask(tasks, params.id) : undefined;
 					if (!t) return snapshot("drop", `Error: task #${params.id ?? "?"} not found`, "not found");
 					t.status = "dropped";
+					t.updatedAt = Date.now();
 					persist(_ctx);
 					return snapshot("drop", `Dropped #${t.id}: ${t.title}`);
 				}

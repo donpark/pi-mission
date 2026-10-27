@@ -291,14 +291,16 @@ async function openPopup() {
 	};
 }
 
-// 1) arrows move the selection AND the rendered lines follow; plain left/right fold
+// 1) opens on the current task (first active), arrows move, render follows;
+//    plain left/right fold
 {
 	const p = await openPopup();
-	const before = p.view();
+	const initial = p.view();
+	assert.ok(/→.*Ship release/.test(initial), `opens on the active task\n${initial}`);
 	p.component.handleInput("\x1b[B");
 	const after = p.view();
-	assert.notEqual(after, before, "render updates when the selection moves");
-	assert.ok(/→ #1 |→.*#1 /.test(after), `selection marker is on the first task row\n${after}`);
+	assert.notEqual(after, initial, "render updates when the selection moves");
+	assert.ok(/→.*Sub for fold/.test(after), `selection marker moved to the next row\n${after}`);
 	p.component.handleInput("\x1b[D");
 	assert.ok(!p.view().includes("Sub for fold"), "left folds the group's subtasks away");
 	p.component.handleInput("\x1b[C");
@@ -366,6 +368,7 @@ async function openPopup() {
 }
 
 // 6) the action menu hides entries that do not apply to the task's state
+//    (the filter is typed as one chunk here: non-bracketed paste / coalesced input)
 assert.deepEqual(mod.menuActions("pending"), ["start", "done", "priority", "drop"]);
 assert.deepEqual(mod.menuActions("active"), ["done", "priority", "drop"]);
 assert.deepEqual(mod.menuActions("done"), ["drop"]);
@@ -398,6 +401,18 @@ assert.deepEqual(mod.menuActions("dropped"), []);
 	p.component.handleInput("\r");
 	await new Promise((r) => setTimeout(r, 0));
 	assert.equal(p.selects.length, 0, "no action menu for a dropped task");
+	await p.run;
+}
+
+// 7) with no active task, the popup opens on the most recently added one
+{
+	const listed = await call({ action: "list" });
+	const ship = listed.details.tasks.find((t) => t.status === "active");
+	await call({ action: "drop", id: ship.id });
+	await call({ action: "add", title: "Fresh capture task" });
+	const p = await openPopup();
+	assert.ok(/→.*Fresh capture task/.test(p.view()), `opens on the most recent task\n${p.view()}`);
+	p.component.handleInput("\x1b");
 	await p.run;
 }
 
