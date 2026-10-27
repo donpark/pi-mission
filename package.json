@@ -1,6 +1,6 @@
 {
   "name": "pi-mission",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Mission tracking for pi: capture work the moment it appears (rabbit holes included), track it autonomously, and browse current work, history, and remaining tasks in one dependency-aware, searchable popup.",
   "keywords": ["pi-package", "tasks", "task-manager", "todo", "productivity", "missions"],
   "license": "MIT",
