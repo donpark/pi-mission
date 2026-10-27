@@ -34,8 +34,8 @@ popup sends each action as a `Mission override:` message.
 
 **Names on capture.** You can add a rough thought instead of a name. A small
 model then writes the name. The name has 3 to 7 words and starts with a verb.
-Set `PI_MISSION_NAME_MODEL` to choose the model. The extension never calls your
-session model for this, so it adds no cost on expensive models.
+See [Naming model](#naming-model) to choose that model. The extension never
+calls your session model for this.
 
 **Structure.** A mission can have subtasks (one level). A mission can have
 prerequisites (`depends_on`). The tool rejects prerequisite cycles. A mission
@@ -47,9 +47,36 @@ the prerequisite graph and marks blocked work with `after #n`.
 work. Completed work remains as history. A bundled skill teaches other agents
 how to find and update these missions.
 
-**Cost.** pi-mission makes one kind of model call: it names captures with the
-small model. All other work is file input and output. The tool adds about 200
-tokens to each request while it is active.
+## Naming model
+
+Set `PI_MISSION_NAME_MODEL` to choose the model that names captures. The value
+is `<provider>/<model-id>`. Use the same form as the model entries in your pi
+settings.
+
+```bash
+PI_MISSION_NAME_MODEL=vercel-ai-gateway/google/gemini-3.5-flash-lite
+```
+
+The default is `openrouter/xiaomi/mimo-v2.6-flash`. If pi cannot find that
+model, the extension uses the capture text as the name. It does not fall back
+to your session model. Set this variable in the environment that starts pi.
+
+## Token cost
+
+pi-mission never calls your session model. Its one model call names captures
+with the small model. All other work is file input and output.
+
+| Action | Cost |
+| --- | --- |
+| tool active (each request in the session) | the tool description and the guideline, about 200 tokens |
+| add, start, done, drop, dep, prio | one short tool result, about 30 tokens |
+| add from a capture | one call to the naming model, about 120 tokens |
+| popup action (start, done, priority, drop) | one short user message, then one agent turn at your model's normal rate |
+| open the popup, filter, sort, persist | no model calls |
+
+Each tool result carries the board snapshot in its `details` field. That field
+is transcript-side state for branch reconstruction. The model does not receive
+it.
 
 ## Granularity
 
