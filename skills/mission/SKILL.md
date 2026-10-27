@@ -1,38 +1,43 @@
 ---
 name: mission
-description: The user-level task board maintained by the pi-mission extension. Use when the user asks about their tasks or work items — what is open, started, done, or remaining, what is on the board, or what they worked on — or when an agent must find, query, or update the user's tracked tasks across pi sessions. Covers where the board data lives, the store schema, cross-session task queries, subtask/prerequisite/priority semantics, the override convention, and the granularity setting. Prefer this over ad-hoc scratch lists for anything that is a task.
+description: The session task board maintained by the pi-mission extension. Use when the user asks about their tasks or work items — what is open, started, done, or remaining, what is on the board, or what they worked on in this session — or when an agent must find, query, or update the session's tracked tasks. Covers where the board data lives, the per-session append log, subtask/prerequisite/priority semantics, the override convention, and the granularity setting. Prefer this over ad-hoc scratch lists for anything that is a task.
 ---
 
-# mission — the user's task board
+# mission — the session's task board
 
-pi-mission (~/.pi/agent/extensions/pi-mission/) tracks the user's work items:
+pi-mission (~/.pi/agent/extensions/pi-mission/) tracks the session's work items:
 planned, started, and finished tasks, with subtasks, prerequisites, and
-priority. A pi session keeps its live board in the transcript (branch-aware);
-the same records are persisted and updated incrementally to a JSON store that
-any agent can read.
+priority. The board is session-scoped, like `/tree`: each session has its own
+board and a new session starts empty.
 
 ## Where the data lives
 
-- Store: `~/.pi/agent/missions.json` (override: `PI_MISSION_STORE`).
-- Shape: `{ "version": 1, "updatedAt": <ms>, "tasks": [Task, ...] }` — a flat
-  list, one record per task. Every board change upserts only the records it
-  touched, so read it whenever you need current state.
-- Task record: `id` (unique within `session`), `session` (origin session id),
-  `title`, `status` (`pending|active|done|dropped`), `priority`
-  (`high|normal|low`; absent or `normal` = normal), `parent` (supertask id or
-  null; one nesting level), `dependsOn` (ids that must be done first),
-  `createdAt`, `startedAt?`, `doneAt?` (ms).
+- One append-only JSONL file per session:
+  `~/.pi/agent/mission-boards/<session-id>.jsonl` (override: `PI_MISSION_STORE`
+  points at the directory). The same per-file pattern pi uses for session
+  transcripts.
+- Each line is the board snapshot after one change: `{ "ts": <ms>, "nextId": n,
+  "tasks": [Task, ...] }`. The current board is the last line; the lines before
+  it are that session's history. A torn trailing line (crash mid-append) is
+  skipped on read.
+- Task record: `id` (unique within the session's board), `title`, `status`
+  (`pending|active|done|dropped`), `priority` (`high|normal|low`; absent or
+  `normal` = normal), `parent` (supertask id or null; one nesting level),
+  `dependsOn` (ids that must be done first), `createdAt`, `updatedAt?`,
+  `startedAt?`, `doneAt?` (ms).
+- Other sessions' files are history. Read them to answer "what did I work on"
+  questions; never copy their tasks onto the current board.
 
-## Find user-level tasks
+## Read the board
 
 ```sh
-# open work across all sessions
-jq -r '.tasks[] | select(.status=="pending" or .status=="active")
-  | "\(.id) [\(.priority // "normal")] \(.title)"' ~/.pi/agent/missions.json
+# current board of one session (latest snapshot)
+tail -1 ~/.pi/agent/mission-boards/<session-id>.jsonl | jq -r \
+  '.tasks[] | "\(.id) [\(.priority // "normal")] \(.status) \(.title)"'
 
-# one session, or history
-jq '.tasks[] | select(.session=="<id>")' ~/.pi/agent/missions.json
-jq -r '.tasks[] | select(.status=="done") | "\(.doneAt) \(.title)"' ~/.pi/agent/missions.json
+# one session's history (how the board evolved)
+jq -r '"\(.ts)", (.tasks[] | "  \(.status) \(.title)")' \
+  ~/.pi/agent/mission-boards/<session-id>.jsonl
 ```
 
 Reading the board semantics:
@@ -48,14 +53,14 @@ Reading the board semantics:
 
 - Inside a pi session with pi-mission: use the `mission` tool —
   `add` (title or capture; parent?; depends_on?; priority?), `dep` (set
-  prerequisites), `prio`, `start`, `done`, `drop`, `list`. Every call persists
-  the change. The board is maintained autonomously: add work the moment it
+  prerequisites), `prio`, `start`, `done`, `drop`, `list`. Every change appends
+  a snapshot line. The board is maintained autonomously: add work the moment it
   appears, start it when work begins, done when it completes.
 - A message that starts with `Mission override:` is a manual state change from
   the user. Apply it exactly and do not relitigate it.
-- Outside pi (no tool available): edit the store surgically — upsert one task
-  record per change, keep the schema and `updatedAt`. Never renumber ids
-  inside one session.
+- Outside pi (no tool available): append one snapshot line to the session's
+  file — copy the previous line's `tasks`, apply the change, bump `nextId` when
+  adding. Never renumber ids inside one session.
 
 ## Granularity
 

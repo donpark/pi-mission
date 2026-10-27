@@ -11,12 +11,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
-// Persist to a scratch store for the test.
-const storeFile = path.join(os.tmpdir(), "pi-mission-selftest-store.json");
-process.env.PI_MISSION_STORE = storeFile;
-fs.rmSync(storeFile, { force: true });
+// Persist to a scratch store directory for the test.
+const storeDir = path.join(os.tmpdir(), "pi-mission-selftest-store");
+process.env.PI_MISSION_STORE = storeDir;
+fs.rmSync(storeDir, { recursive: true, force: true });
 
-const ctxStub = { sessionManager: { getSessionId: () => "test-session" } };
+let currentSession = "test-session";
+const ctxStub = { sessionManager: { getSessionId: () => currentSession } };
 
 // The packages the extension imports at runtime: pi's managed install when
 // present, else the repo's node_modules (CI runs `npm install --no-save jiti
@@ -213,29 +214,48 @@ assert.equal(byStatus[byStatus.length - 1], 2, `status sort ends with dropped\n$
 const prioShown = mod.popupRows(sorted, "all", new Set(), "board").find((row) => row.task.id === 4);
 assert.match(prioShown.text, /\(high\)/, "priority is visible on the row");
 
-// persistence: one record per task, updated in place as the board changes
-const store = JSON.parse(fs.readFileSync(storeFile, "utf8"));
-assert.equal(store.version, 1);
-assert.ok(store.updatedAt > 0, "updatedAt is maintained");
-const mine = store.tasks.filter((t) => t.session === "test-session");
-assert.equal(mine.length, 8, `one record per task\n${JSON.stringify(mine.map((t) => t.id))}`);
-assert.equal(mine.find((t) => t.id === 1).status, "done", "done upserts the same record");
-assert.equal(mine.find((t) => t.id === 4).priority, "high", "prio is persisted");
-assert.deepEqual(mine.find((t) => t.id === 3).dependsOn, [4], "dep is persisted");
+// persistence: an append-only per-session log — one snapshot line per change,
+// the last line is the current board
+const history = fs.readFileSync(path.join(storeDir, "test-session.jsonl"), "utf8").trim().split("\n");
+assert.ok(history.length > 1, `history is append-only: one line per change\n${history.length}`);
+const snap = JSON.parse(history[history.length - 1]);
+assert.equal(snap.tasks.length, 8, `one record per task\n${JSON.stringify(snap.tasks.map((t) => t.id))}`);
+assert.equal(snap.tasks.find((t) => t.id === 1).status, "done", "done is in the latest snapshot");
+assert.equal(snap.tasks.find((t) => t.id === 4).priority, "high", "prio is persisted");
+assert.deepEqual(snap.tasks.find((t) => t.id === 3).dependsOn, [4], "dep is persisted");
+assert.equal(typeof snap.nextId, "number", "nextId rides with the snapshot");
 
-// cross-session carry-over: a fresh session adopts open work, renumbered
+// session-bound boards (the /tree model): a fresh session starts empty and
+// restores only its own log — never another session's tasks (cross-session
+// carry-over is what produced duplicate boards)
+currentSession = "fresh-session";
 handlers.session_start(null, {
 	sessionManager: { getSessionId: () => "fresh-session", getBranch: () => [] },
 });
 r = await call({ action: "list" });
-const adopted = textOf(r);
-assert.match(adopted, /#1 Ship release [^\n]*\(after #2\)/, "adopted task keeps its prerequisite (renumbered)");
-assert.match(adopted, /#2 Run tests \(high\)/, "adopted task keeps priority");
-assert.match(adopted, /#4 Write the exporter/, "parent chain is adopted for grouping");
-assert.match(adopted, /   ✓ #3 Add regression tests|   ○ #3 Add regression tests/, "adopted subtask stays under its parent");
-assert.ok(!adopted.includes("Audit leak sources"), "dropped work is not carried over");
-assert.ok(!adopted.includes("Tag the release"), "finished subtasks are not carried over");
-assert.match(adopted, /#5 look into that weird crash on hangup/);
+assert.equal(r.details.tasks.length, 0, "a fresh session starts with an empty board");
+assert.ok(!textOf(r).includes("Ship release"), "no tasks leak in from another session");
+
+// own-log restore covers the compacted-transcript case
+await call({ action: "add", title: "Restored work" });
+handlers.session_start(null, {
+	sessionManager: { getSessionId: () => "fresh-session", getBranch: () => [] },
+});
+r = await call({ action: "list" });
+assert.match(textOf(r), /#1 Restored work/, "the session's own log restores its board");
+
+// a branch with mission results wins over the log (the /tree restore path) —
+// and leaves a clean empty board for the popup fixtures below
+handlers.session_start(null, {
+	sessionManager: {
+		getSessionId: () => "fresh-session",
+		getBranch: () => [{
+			type: "message",
+			message: { role: "toolResult", toolName: "mission", details: { action: "list", tasks: [], nextId: 1 } },
+		}],
+	},
+});
+assert.equal((await call({ action: "list" })).details.tasks.length, 0, "branch transcript wins over the log");
 
 // popup input review: every input class has a scenario — arrows/marker render,
 // fold on plain arrows, enter, home/end/page, bracketed paste, mouse row offsets
@@ -244,7 +264,15 @@ const piTui = await jiti.import(alias["@earendil-works/pi-tui"]);
 const realKb = new piTui.KeybindingsManager(piTui.TUI_KEYBINDINGS);
 const theme = new Proxy({}, { get: () => (...args) => String(args[args.length - 1]) });
 const fakeTui = { requestRender() {} };
-// a subtask under the first group so fold has something to hide
+// popup fixtures on the fresh board: an active task with a subtask (so fold
+// has something to hide) and a done group whose pending subtask is the last row
+r = await call({ action: "add", title: "Ship release" });
+await call({ action: "start", id: 1 });
+await call({ action: "add", title: "Run tests" });
+await call({ action: "add", title: "Explicit Name" });
+await call({ action: "add", title: "Write the exporter" });
+await call({ action: "done", id: 4 });
+await call({ action: "add", title: "Add regression tests", parent: 4 });
 await call({ action: "add", title: "Sub for fold", parent: 1 });
 
 async function openPopup() {

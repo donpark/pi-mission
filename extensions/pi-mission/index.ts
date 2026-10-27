@@ -21,7 +21,7 @@
  */
 import { DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Container, type SelectItem, SelectList, Text, type TuiMouseEvent, type TuiMouseEventResult, decodeKittyPrintable, fuzzyFilter, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -48,30 +48,40 @@ interface Task {
 type MissionAction = "add" | "dep" | "prio" | "start" | "done" | "drop" | "list";
 
 /**
- * Persistence: the same task records, kept in one JSON store and updated
- * incrementally (each board change upserts only the task records it touched).
- * Override the location with PI_MISSION_STORE.
+ * Persistence: one append-only JSONL file per session, <session-id>.jsonl under
+ * the store directory (PI_MISSION_STORE overrides the location) — the same
+ * per-file pattern pi uses for session transcripts. Each line is the board
+ * snapshot after one change (latest line wins on replay), so writes never
+ * read-merge and a board can only ever be read from its own session's file.
  */
-interface StoredTask extends Task {
-	session: string;
-}
+const storeDir = (): string => process.env.PI_MISSION_STORE ?? join(getAgentDir(), "mission-boards");
 
-const storePath = (): string =>
-	process.env.PI_MISSION_STORE ?? join(getAgentDir(), "missions.json");
+const sessionLog = (session: string): string => join(storeDir(), `${session}.jsonl`);
 
-const readStore = (): { version: number; updatedAt?: number; tasks: StoredTask[] } => {
-	try {
-		return JSON.parse(readFileSync(storePath(), "utf8"));
-	} catch {
-		return { version: 1, tasks: [] };
-	}
+const appendSnapshot = (session: string, tasks: Task[], nextId: number): void => {
+	mkdirSync(storeDir(), { recursive: true });
+	appendFileSync(sessionLog(session), `${JSON.stringify({ ts: Date.now(), tasks, nextId })}\n`);
 };
 
-const writeStore = (tasks: StoredTask[]): void => {
-	const path = storePath();
-	const tmp = `${path}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify({ version: 1, updatedAt: Date.now(), tasks }, null, 1)}\n`);
-	renameSync(tmp, path);
+/** The session's board as of its last change: the last parseable log line. */
+const readSnapshot = (session: string): { tasks: Task[]; nextId: number } | undefined => {
+	let text: string;
+	try {
+		text = readFileSync(sessionLog(session), "utf8");
+	} catch {
+		return undefined;
+	}
+	const lines = text.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (!lines[i].trim()) continue;
+		try {
+			const snap = JSON.parse(lines[i]);
+			if (Array.isArray(snap.tasks)) return snap;
+		} catch {
+			// a torn trailing line from a crash mid-append: skip it
+		}
+	}
+	return undefined;
 };
 
 
@@ -637,21 +647,13 @@ export default function (pi: ExtensionAPI) {
 	let nextId = 1;
 
 	/**
-	 * Persist the session's current task set. Called after every board change:
-	 * records are upserted per (session, id), so the store tracks the board
-	 * incrementally. Fail-open: persistence never blocks board work.
+	 * Append the board snapshot after a change. Called after every board change;
+	 * the log is the session's board history (latest line = current board).
+	 * Fail-open: persistence never blocks board work.
 	 */
 	const persist = (ctx: ExtensionContext): void => {
 		try {
-			const session = ctx.sessionManager.getSessionId();
-			const store = readStore();
-			for (const t of tasks) {
-				const rec: StoredTask = { ...t, session };
-				const i = store.tasks.findIndex((x) => x.session === session && x.id === t.id);
-				if (i >= 0) store.tasks[i] = rec;
-				else store.tasks.push(rec);
-			}
-			writeStore(store.tasks);
+			appendSnapshot(ctx.sessionManager.getSessionId(), tasks, nextId);
 		} catch {
 			// ignore — the transcript snapshot remains the source of truth
 		}
@@ -672,48 +674,14 @@ export default function (pi: ExtensionAPI) {
 				fromBranch = true;
 			}
 		}
-		if (!fromBranch) adoptOpenTasks(ctx);
-	};
-
-	/**
-	 * Fresh session: adopt the user-level open work from the store — pending and
-	 * active tasks plus their parent chains. Ids are renumbered because each
-	 * session has its own 1..n id space; parents and prerequisites are remapped.
-	 * A prerequisite outside the adopted set is dropped: it can only point at
-	 * finished, dropped, or historical work (satisfied by definition), and a kept
-	 * raw id would collide with the renumbered ones.
-	 */
-	const adoptOpenTasks = (ctx: ExtensionContext): void => {
-		const stored = readStore().tasks;
-		const byKey = new Map(stored.map((t) => [`${t.session}:${t.id}`, t]));
-		const wanted = new Map<string, StoredTask>();
-		for (const t of stored) {
-			if (t.status !== "pending" && t.status !== "active") continue;
-			let cur: StoredTask | undefined = t;
-			while (cur) {
-				wanted.set(`${cur.session}:${cur.id}`, cur);
-				cur = cur.parent !== null ? byKey.get(`${cur.session}:${cur.parent}`) : undefined;
-			}
+		if (fromBranch) return;
+		// Session-bound persistence (the /tree model): replay this session's own
+		// append log. Boards never cross sessions — a fresh session starts empty.
+		const snap = readSnapshot(ctx.sessionManager.getSessionId());
+		if (snap) {
+			tasks = snap.tasks;
+			nextId = snap.nextId;
 		}
-		const picked = [...wanted.values()];
-		const remap = new Map<string, number>();
-		let n = 1;
-		for (const t of picked) remap.set(`${t.session}:${t.id}`, n++);
-		tasks = picked.map((t) => ({
-			id: remap.get(`${t.session}:${t.id}`) as number,
-			title: t.title,
-			status: t.status,
-			priority: t.priority,
-			parent: t.parent !== null ? (remap.get(`${t.session}:${t.parent}`) ?? null) : null,
-			dependsOn: t.dependsOn
-				.map((d) => remap.get(`${t.session}:${d}`))
-				.filter((d): d is number => d !== undefined),
-			createdAt: t.createdAt,
-			startedAt: t.startedAt,
-			doneAt: t.doneAt,
-		}));
-		nextId = n;
-		void ctx;
 	};
 	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));

@@ -42,10 +42,13 @@ prerequisites (`depends_on`). The tool rejects prerequisite cycles. A mission
 has a priority: `high`, `normal`, or `low`. The list sorts remaining work by
 the prerequisite graph and marks blocked work with `after #n`.
 
-**Persistence.** Each change updates `~/.pi/agent/missions.json`. Set
-`PI_MISSION_STORE` to change the location. A new session adopts your open
-work. Completed work remains as history. A bundled skill teaches other agents
-how to find and update these missions.
+**Persistence.** Each session keeps its board in one append-only file,
+`~/.pi/agent/mission-boards/<session-id>.jsonl` — one file per session, the
+same pattern pi uses for transcripts. Each line is the board after a change;
+the last line is the current board, and the lines before it are that session's
+history. Boards are session-scoped like `/tree`: a new session starts empty.
+Set `PI_MISSION_STORE` to change the location. A bundled skill teaches other
+agents how to read and update these boards.
 
 ## Naming model
 
