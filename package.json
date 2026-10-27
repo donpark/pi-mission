@@ -11,6 +11,7 @@
   },
   "files": ["extensions", "skills", "docs", "README.md", "LICENSE"],
   "pi": {
+    "image": "https://raw.githubusercontent.com/donpark/pi-mission/main/docs/screenshot.png",
     "extensions": ["./extensions/pi-mission/index.ts"],
     "skills": ["./skills/mission"]
   },
