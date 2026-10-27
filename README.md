@@ -33,9 +33,9 @@ mission done when work completes. You intervene only to change a state. The
 popup sends each action as a `Mission override:` message.
 
 **Names on capture.** You can add a rough thought instead of a name. A small
-model then writes the name. The name has 3 to 7 words and starts with a verb.
-See [Naming model](#naming-model) to choose that model. The extension never
-calls your session model for this.
+model then writes the name. The name has 3 to 7 words and starts with a plain
+verb. See [Naming model](#naming-model) to choose that model. The extension
+never calls your session model for this.
 
 **Structure.** A mission can have subtasks (one level). A mission can have
 prerequisites (`depends_on`). The tool rejects prerequisite cycles. A mission
@@ -73,7 +73,7 @@ with the small model. All other work is file input and output.
 | --- | --- |
 | tool active (each request in the session) | the tool description and the guideline, about 200 tokens |
 | add, start, done, drop, dep, prio | one short tool result, about 30 tokens |
-| add from a capture | one call to the naming model, about 120 tokens |
+| add from a capture | one call to the naming model, about 160 tokens |
 | popup action (start, done, priority, drop) | one short user message, then one agent turn at your model's normal rate |
 | open the popup, filter, sort, persist | no model calls |
 

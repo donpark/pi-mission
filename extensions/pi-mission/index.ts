@@ -337,9 +337,9 @@ const granularityRule = (): string =>
 	GRANULARITY_RULES[process.env.PI_MISSION_GRANULARITY ?? "normal"] ?? GRANULARITY_RULES.normal;
 
 /**
- * Name a captured thought with a bargain-tier model: 3-7 words, verb-first.
- * Fail-open — on any failure the cleaned capture text becomes the name, so task
- * creation never blocks on naming.
+ * Name a captured thought with a bargain-tier model: 3-7 words, plain verb
+ * first. Fail-open — on any failure the cleaned capture text becomes the name,
+ * so task creation never blocks on naming.
  */
 const generateName = async (
 	ctx: ExtensionContext,
@@ -354,11 +354,18 @@ const generateName = async (
 		// found means the cleaned capture becomes the name.
 		const model = ctx.modelRegistry.find(provider, rest.join("/"));
 		if (!model) return { title: fallback };
-		if (!model) return { title: fallback };
 		const response = await ctx.modelRegistry.complete(model, {
 			systemPrompt:
 				"You name tasks for a developer's task board. Return only the name: " +
-				"3 to 7 words, verb first, specific, plain English. No quotes, no numbering, no trailing period.",
+				"3 to 7 words, verb first, plain English. " +
+				// The high-impact subset of Simplified Technical English for short
+				// titles: one plain verb (no phrasal verbs, no noun forms), a concrete
+				// object, and one consistent word per thing.
+				"Use one plain verb, never a phrasal verb (investigate, not look into) " +
+				"or a noun form (analyze, not analysis of). " +
+				"Name the concrete thing, not a vague one. " +
+				"Use the same word for the same thing as the existing names. " +
+				"No quotes, no numbering, no trailing period.",
 			messages: [{
 				role: "user",
 				content: [{

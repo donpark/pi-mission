@@ -464,4 +464,24 @@ assert.deepEqual(mod.menuActions("dropped"), []);
 	assert.equal(completeCalls, 0, "the session model is never called for naming");
 }
 
+// 9) naming prompt: the bargain model does the naming when present, its title
+// is cleaned, and the prompt stays small (the token-cost contract)
+{
+	let prompt = "";
+	const namingCtx = {
+		sessionManager: { getSessionId: () => currentSession },
+		modelRegistry: {
+			find: () => ({ id: "bargain/name-model" }),
+			complete: async (_model, req) => {
+				prompt = req.systemPrompt;
+				return { content: [{ type: "text", text: "\"Fix the leak detector.\"" }], usage: {} };
+			},
+		},
+	};
+	const r2 = await tool.execute("tc", { action: "add", capture: "leak thing needs sorting" }, undefined, () => {}, namingCtx);
+	assert.match(textOf(r2), /Added task #\d+: Fix the leak detector \(named from capture\)/);
+	assert.ok(prompt.length < 600, `naming prompt stays small (${prompt.length} chars)`);
+	assert.match(prompt, /plain verb/, "plain-verb rule steers the name");
+}
+
 console.log("pi-mission selftest: all assertions passed");
