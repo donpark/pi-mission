@@ -48,25 +48,20 @@ type MissionAction = "add" | "dep" | "prio" | "start" | "done" | "drop" | "list"
 /**
  * Persistence: the same task records, kept in one JSON store and updated
  * incrementally (each board change upserts only the task records it touched).
- * Override the location with PI_MISSION_STORE (legacy PI_KANBAN_STORE still works).
+ * Override the location with PI_MISSION_STORE.
  */
 interface StoredTask extends Task {
 	session: string;
 }
 
 const storePath = (): string =>
-	process.env.PI_MISSION_STORE ?? process.env.PI_KANBAN_STORE ?? join(getAgentDir(), "missions.json");
+	process.env.PI_MISSION_STORE ?? join(getAgentDir(), "missions.json");
 
 const readStore = (): { version: number; updatedAt?: number; tasks: StoredTask[] } => {
 	try {
 		return JSON.parse(readFileSync(storePath(), "utf8"));
 	} catch {
-		// One-time legacy import: the pre-rename store, next to the primary one.
-		try {
-			return JSON.parse(readFileSync(join(dirname(storePath()), "kanban.json"), "utf8"));
-		} catch {
-			return { version: 1, tasks: [] };
-		}
+		return { version: 1, tasks: [] };
 	}
 };
 
@@ -317,7 +312,7 @@ let boardSort: SortMode = "board";
 type MissionItem = SelectItem & { search: string };
 
 /** Bargain-tier model for task naming (override: PI_MISSION_NAME_MODEL=provider/model-id). */
-const NAME_MODEL_ID = process.env.PI_MISSION_NAME_MODEL ?? process.env.PI_KANBAN_NAME_MODEL
+const NAME_MODEL_ID = process.env.PI_MISSION_NAME_MODEL
 	?? "openrouter/xiaomi/mimo-v2.6-flash";
 
 /** Granularity dial (PI_MISSION_GRANULARITY): how much work becomes a task. */
@@ -327,8 +322,7 @@ const GRANULARITY_RULES: Record<string, string> = {
 	coarse: "Granularity is coarse: record only multi-step work items as tasks; fold small steps into the parent task instead of creating tasks.",
 };
 const granularityRule = (): string =>
-	GRANULARITY_RULES[process.env.PI_MISSION_GRANULARITY ?? process.env.PI_KANBAN_GRANULARITY ?? "normal"]
-		?? GRANULARITY_RULES.normal;
+	GRANULARITY_RULES[process.env.PI_MISSION_GRANULARITY ?? "normal"] ?? GRANULARITY_RULES.normal;
 
 /**
  * Name a captured thought with a bargain-tier model: 3-7 words, verb-first.
@@ -637,7 +631,7 @@ export default function (pi: ExtensionAPI) {
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "message") continue;
 			const msg = entry.message;
-			if (msg.role !== "toolResult" || (msg.toolName !== "mission" && msg.toolName !== "kanban")) continue;
+			if (msg.role !== "toolResult" || msg.toolName !== "mission") continue;
 			const details = msg.details as MissionDetails | undefined;
 			if (details) {
 				tasks = details.tasks;
@@ -704,8 +698,8 @@ export default function (pi: ExtensionAPI) {
 				"The board is the source of truth for work items — anything that is a task (planned, started, " +
 				"or remaining) goes on the mission board, not into a scratch or todo list. " +
 				`${granularityRule()} ` +
-				"A message that starts with \"Mission override\" (or the legacy \"Kanban override\" / \"Docket override\") is a " +
-				"manual state change from the user — apply it exactly and do not relitigate it.";
+				"A message that starts with \"Mission override\" is a manual state change from the user — " +
+				"apply it exactly and do not relitigate it.";
 		} else {
 			delete event.systemPromptOptions.sections.mission;
 		}
@@ -730,8 +724,8 @@ export default function (pi: ExtensionAPI) {
 			"scratch or todo list. Maintain it autonomously during your work: " +
 			"add a task the moment work appears — including rabbit holes and ad-hoc tasks — start it " +
 			"when work begins, and mark it done when it completes. Do not wait to be asked. " +
-			"Messages that start with 'Mission override' (or the legacy 'Kanban override' / 'Docket override') are manual " +
-			"state changes from the user — apply them exactly. " +
+			"Messages that start with 'Mission override' are manual state changes from the user — " +
+			"apply them exactly. " +
 			"Actions: add (title? for an explicit name, or capture? with a raw thought — a concise " +
 			"name is generated with a bargain-tier model; parent? for a subtask, depends_on? for prerequisites, " +
 			"priority? high/normal/low), " +
@@ -955,13 +949,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("mission", {
-		description: "Show the mission board popup: current work, what was done, and remaining tasks in dependency order",
-		handler: async (_args, ctx) => openBoard(ctx),
-	});
-
-	// Back-compat alias for the pre-rename command.
-	pi.registerCommand("kanban", {
-		description: "Alias for /mission",
+		description: "Show the mission list popup: current work, what was done, and remaining tasks in dependency order",
 		handler: async (_args, ctx) => openBoard(ctx),
 	});
 

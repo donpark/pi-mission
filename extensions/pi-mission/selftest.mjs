@@ -62,7 +62,6 @@ mod.default(pi);
 assert.equal(tool?.name, "mission", "registers the mission tool");
 const command = commands.find((c) => c.name === "mission");
 assert.ok(command, "registers the /mission command");
-assert.ok(commands.some((c) => c.name === "kanban"), "keeps /kanban as an alias");
 assert.deepEqual(shortcuts.map((s) => s.key).sort(), ["alt+j", "alt+m", "ctrl+shift+k"],
 	"registers all board shortcuts");
 assert.ok(shortcuts.every((s) => typeof s.handler === "function"), "shortcuts share the board handler");

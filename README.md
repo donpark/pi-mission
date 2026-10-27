@@ -51,12 +51,6 @@ The `⌥` shortcuts need option-as-alt from the terminal. In Ghostty, set
 `macos_option_as_alt = true` — it also unlocks pi's own `⌥B/⌥D/⌥F` editor
 motions. `⌃⇧K` works in CSI-u terminals without configuration.
 
-## Legacy names
-
-The project was previously named pi-kanban (and briefly pi-docket).
-`PI_KANBAN_*` environment variables, a `kanban.json` store next to
-`missions.json`, the `/kanban` command, and `Kanban override:` messages are
-still accepted.
 
 ## Development
 
