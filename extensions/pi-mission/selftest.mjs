@@ -18,15 +18,26 @@ fs.rmSync(storeFile, { force: true });
 
 const ctxStub = { sessionManager: { getSessionId: () => "test-session" } };
 
-// pi's bundled node_modules (the packages the extension imports at runtime).
+// The packages the extension imports at runtime: pi's managed install when
+// present, else the repo's node_modules (CI runs `npm install --no-save jiti
+// typebox @earendil-works/pi-tui @earendil-works/pi-coding-agent` first).
 const releases = path.join(process.env.HOME, ".pi/agent/install/releases");
-const piModules = fs
-	.readdirSync(releases)
-	.map((d) => path.join(releases, d, "node_modules"))
-	.filter((p) => fs.existsSync(path.join(p, "typebox")))
-	.sort()
-	.pop();
-assert.ok(piModules, "pi node_modules not found under ~/.pi/agent/install/releases");
+const hasRuntime = (p) => fs.existsSync(path.join(p, "typebox")) && fs.existsSync(path.join(p, "jiti"));
+let piModules;
+try {
+	piModules = fs.readdirSync(releases)
+		.map((d) => path.join(releases, d, "node_modules"))
+		.filter(hasRuntime)
+		.sort()
+		.pop();
+} catch {
+	// no managed pi install
+}
+if (!piModules) {
+	const local = path.join(here, "..", "..", "node_modules");
+	if (hasRuntime(local)) piModules = local;
+}
+assert.ok(piModules, "runtime node_modules not found — install pi, or: npm install --no-save jiti typebox @earendil-works/pi-tui @earendil-works/pi-coding-agent");
 
 // Alias each bare specifier to its entry FILE. Exports-map packages (typebox,
 // pi-coding-agent) do not resolve as absolute directories or via require.resolve.

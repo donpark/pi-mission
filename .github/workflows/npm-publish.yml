@@ -1,0 +1,42 @@
+name: npm publish
+
+# Publishes to npm when a version tag (v0.1.0, v1.2.3, ...) is pushed.
+# Requires one repository secret: NPM_TOKEN (an npm granular access token
+# with publish rights for pi-mission).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install host packages for the self-test
+        run: npm install --no-save jiti typebox @earendil-works/pi-tui @earendil-works/pi-coding-agent
+
+      - name: Self-test
+        run: node extensions/pi-mission/selftest.mjs
+
+      - name: Tag must match package.json version
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package version $pkg"
+            exit 1
+          fi
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
