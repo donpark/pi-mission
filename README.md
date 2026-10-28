@@ -50,6 +50,32 @@ history. Boards are session-scoped like `/tree`: a new session starts empty.
 Set `PI_MISSION_STORE` to change the location. A bundled skill teaches other
 agents how to read and update these boards.
 
+## How a session flows
+
+1. **Start working.** The board starts empty. As work appears — planned steps,
+   rabbit holes, ad-hoc requests — the agent records each item as a mission and
+   marks it started and done as the work happens. You do not manage the board.
+2. **Ask for what should be on it.** "Add these as tasks", "add the remaining
+   open items" — the agent records them in one call. Rough thoughts are fine:
+   a small model writes the name ("look into that crash" becomes "Investigate
+   the hangup crash").
+3. **Look at the board whenever you wonder "what's left?"** `/mission` (or
+   `⌥M`, `⌥J`, `⌃⇧K`) opens the popup: current work first, remaining work in
+   dependency order, blocked work marked `after #n`. Type to filter, `←→` to
+   fold subtasks, `⌃O` and `⌃S` to change the view or sort.
+4. **Steer only when you disagree.** `Enter` on a mission offers its next
+   actions: start, done, priority, drop. Each goes out as a
+   `Mission override:` message and is applied exactly. That is the only time
+   you touch state by hand.
+5. **End the session whenever.** The board's history stays in that session's
+   file. The one habit worth keeping: before quitting, mark finished work done
+   (or drop what you will not do) so "what is unfinished" is already curated.
+6. **Continue in a new session with `/mission-handoff`.** It carries the
+   previous session's unfinished missions over to the new board — explicitly,
+   never automatically. They enter as `pending`; work restarts here. Since
+   sessions from different projects can interleave, the handoff names its
+   source session: if it picked the wrong one, say so and name the right one.
+
 ## Naming model
 
 Set `PI_MISSION_NAME_MODEL` to choose the model that names captures. The value

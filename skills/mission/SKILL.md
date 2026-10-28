@@ -1,6 +1,6 @@
 ---
 name: mission
-description: The session task board maintained by the pi-mission extension. Use when the user asks about their tasks or work items — what is open, started, done, or remaining, what is on the board, or what they worked on in this session — or when an agent must find, query, or update the session's tracked tasks. Covers where the board data lives, the per-session append log, subtask/prerequisite/priority semantics, the override convention, and the granularity setting. Prefer this over ad-hoc scratch lists for anything that is a task.
+description: The session task board maintained by the pi-mission extension. Use when the user asks about their tasks or work items — what is open, started, done, or remaining, what is on the board, what they worked on in this session, or to carry unfinished work over from a previous session (handoff) — or when an agent must find, query, or update the session's tracked tasks. Covers where the board data lives, the per-session append log, subtask/prerequisite/priority semantics, the handoff recipe, the override convention, and the granularity setting. Prefer this over ad-hoc scratch lists for anything that is a task.
 ---
 
 # mission — the session's task board
@@ -9,6 +9,10 @@ pi-mission (~/.pi/agent/extensions/pi-mission/) tracks the session's work items:
 planned, started, and finished tasks, with subtasks, prerequisites, and
 priority. The board is session-scoped, like `/tree`: each session has its own
 board and a new session starts empty.
+
+When the user asks to track, add, or record tasks ("add these as tasks", "add
+the remaining open items", "keep track of this work"), the answer is one
+`mission` tool call — see **Update the board** below for the exact arguments.
 
 ## Where the data lives
 
@@ -26,7 +30,8 @@ board and a new session starts empty.
   `dependsOn` (ids that must be done first), `createdAt`, `updatedAt?`,
   `startedAt?`, `doneAt?` (ms).
 - Other sessions' files are history. Read them to answer "what did I work on"
-  questions; never copy their tasks onto the current board.
+  questions. Copy their tasks onto the current board only in a handoff the user
+  asked for (see Hand off unfinished work) — never automatically.
 
 ## Read the board
 
@@ -51,16 +56,48 @@ Reading the board semantics:
 
 ## Update the board
 
-- Inside a pi session with pi-mission: use the `mission` tool —
-  `add` (title or capture; parent?; depends_on?; priority?), `dep` (set
-  prerequisites), `prio`, `start`, `done`, `drop`, `list`. Every change appends
-  a snapshot line. The board is maintained autonomously: add work the moment it
-  appears, start it when work begins, done when it completes.
+In a pi session the tool is **`mission`**. One call per change; `add` takes
+many tasks in one call. The board is maintained autonomously: add work the
+moment it appears, start it when work begins, done when it completes.
+
+Common cases as literal tool arguments:
+
+- One task: `{ "action": "add", "title": "Fix the exporter crash" }`
+- Many tasks in one call (e.g. "add the remaining open items"):
+  `{ "action": "add", "tasks": [{ "title": "…" }, { "title": "…" }] }` —
+  one entry per task, ids assigned in order, all-or-nothing (an invalid entry
+  adds nothing). Per entry: `title` (exact name) or `capture` (rough thought —
+  a concise name is generated), `parent` (supertask id), `depends_on`,
+  `priority` (high/normal/low).
+- To make one new task wait on another new task: add both first, then wire them
+  with `dep` — batch `depends_on` ids must already exist on the board.
+- Remaining actions: `dep` (id, depends_on — set prerequisites, rejects cycles),
+  `prio` (id, priority), `start` (id), `done` (id), `drop` (id), `list`.
+- Every change appends a snapshot line.
 - A message that starts with `Mission override:` is a manual state change from
   the user. Apply it exactly and do not relitigate it.
 - Outside pi (no tool available): append one snapshot line to the session's
   file — copy the previous line's `tasks`, apply the change, bump `nextId` when
   adding. Never renumber ids inside one session.
+
+## Hand off unfinished work
+
+Carry-over happens only when the user asks ("carry over last session's
+unfinished tasks", "continue where we left off") — never automatically.
+
+- `/mission-handoff` (in a pi session) does it end to end: it sends the
+  unfinished (`pending`/`active`) tasks of the most recent previous board to
+  the agent, which adds them with one batch `add`, skipping titles already on
+  this board. The message names the source session — when interleaved projects
+  made it pick the wrong one, correct it in conversation and read the right
+  file instead.
+- By hand: `tail -1` the previous session's file, keep tasks with status
+  `pending` or `active`, skip titles already on this board, and add the rest in
+  one call: `{ "action": "add", "tasks": [{ "title": "…" }, …] }`.
+- Carried-over tasks enter the board as `pending` — work restarts here.
+- The safe end-of-session step is not a command: keep the board honest — mark
+  finished work `done` or `dropped` before quitting, so the unfinished set is
+  already curated.
 
 ## Granularity
 

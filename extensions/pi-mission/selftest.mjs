@@ -68,8 +68,9 @@ const pi = {
 	registerCommand(name, c) { commands.push({ name, ...c }); },
 	registerShortcut(key, opts) { shortcuts.push({ key, ...opts }); },
 	on(name, fn) { handlers[name] = fn; return () => {}; },
-	sendUserMessage() {},
+	sendUserMessage(m) { sent.push(m); },
 };
+const sent = [];
 mod.default(pi);
 assert.equal(tool?.name, "mission", "registers the mission tool");
 const command = commands.find((c) => c.name === "mission");
@@ -165,10 +166,32 @@ r = await call({ action: "add" });
 assert.match(textOf(r), /title or capture required/);
 assert.ok(r.details.error);
 
+// batch add: several tasks in one call, ids assigned in order, per-item fields
+r = await call({ action: "add", tasks: [
+	{ title: "Batch one" },
+	{ title: "Batch two", priority: "high", depends_on: [3] },
+	{ capture: "  batch three raw thought  " },
+] });
+assert.match(textOf(r), /Added 3 tasks/);
+const batch = tasksOf(r).filter((t) => t.id >= 9);
+assert.deepEqual(batch.map((t) => t.id), [9, 10, 11], "ids assigned in order");
+assert.equal(batch[1].priority, "high");
+assert.deepEqual(batch[1].dependsOn, [3]);
+assert.equal(batch[2].title, "batch three raw thought");
+
+// batch add rejects a bad item before adding anything
+r = await call({ action: "add", tasks: [{ title: "Never added" }, { title: "Bad parent", parent: 99 }] });
+assert.match(textOf(r), /parent #99/);
+assert.ok(r.details.error);
+assert.ok(!tasksOf(r).some((t) => t.title === "Never added"), "batch is all-or-nothing");
+r = await call({ action: "add", tasks: [{ title: "Also never added" }, {}] });
+assert.match(textOf(r), /title or capture required \(task 2\)/);
+assert.ok(!tasksOf(r).some((t) => t.title === "Also never added"), "batch is all-or-nothing");
+
 // every result carries the full snapshot for branch-aware reconstruction
 r = await call({ action: "list" });
 assert.equal(r.details.action, "list");
-assert.equal(r.details.tasks.length, 8);
+assert.equal(r.details.tasks.length, 11);
 assert.equal(typeof r.details.nextId, "number");
 
 // board text shows the sections and the completed work
@@ -205,7 +228,7 @@ sorted.forEach((t) => {
 });
 const firstId = (sort) => mod.popupRows(sorted, "all", new Set(), sort)[0].task.id;
 assert.equal(firstId("priority"), 4, "priority sort puts high first");
-assert.equal(firstId("recent"), 8, "recent sort puts newest first");
+assert.equal(firstId("recent"), 11, "recent sort puts newest first");
 assert.equal(firstId("oldest"), 1, "oldest sort puts oldest first");
 const byStatus = mod.popupRows(sorted, "all", new Set(), "status")
 	.filter((row) => row.task.parent === null).map((row) => row.task.id);
@@ -219,7 +242,7 @@ assert.match(prioShown.text, /\(high\)/, "priority is visible on the row");
 const history = fs.readFileSync(path.join(storeDir, "test-session.jsonl"), "utf8").trim().split("\n");
 assert.ok(history.length > 1, `history is append-only: one line per change\n${history.length}`);
 const snap = JSON.parse(history[history.length - 1]);
-assert.equal(snap.tasks.length, 8, `one record per task\n${JSON.stringify(snap.tasks.map((t) => t.id))}`);
+assert.equal(snap.tasks.length, 11, `one record per task\n${JSON.stringify(snap.tasks.map((t) => t.id))}`);
 assert.equal(snap.tasks.find((t) => t.id === 1).status, "done", "done is in the latest snapshot");
 assert.equal(snap.tasks.find((t) => t.id === 4).priority, "high", "prio is persisted");
 assert.deepEqual(snap.tasks.find((t) => t.id === 3).dependsOn, [4], "dep is persisted");
@@ -482,6 +505,51 @@ assert.deepEqual(mod.menuActions("dropped"), []);
 	assert.match(textOf(r2), /Added task #\d+: Fix the leak detector \(named from capture\)/);
 	assert.ok(prompt.length < 600, `naming prompt stays small (${prompt.length} chars)`);
 	assert.match(prompt, /plain verb/, "plain-verb rule steers the name");
+}
+
+// 10) handoff: unfinished tasks from the most recent previous board arrive as
+//     one agent message; titles already on this board and finished work stay out
+{
+	const boot = (id) => handlers.session_start(null, {
+		sessionManager: { getSessionId: () => id, getBranch: () => [] },
+	});
+	currentSession = "prev-session";
+	boot("prev-session");
+	await call({ action: "add", title: "Leftover pending work" });
+	await call({ action: "add", title: "Leftover active work" });
+	await call({ action: "add", title: "Already finished work" });
+	const prev = await call({ action: "list" });
+	const byTitle = (t) => prev.details.tasks.find((x) => x.title === t).id;
+	await call({ action: "start", id: byTitle("Leftover active work") });
+	await call({ action: "done", id: byTitle("Already finished work") });
+	// make prev-session the most recent board regardless of write timing
+	const bump = new Date(Date.now() + 60_000);
+	fs.utimesSync(path.join(storeDir, "prev-session.jsonl"), bump, bump);
+
+	currentSession = "handoff-session";
+	boot("handoff-session");
+	await call({ action: "add", title: "Leftover pending work" });
+	sent.length = 0;
+	const handoff = commands.find((c) => c.name === "mission-handoff");
+	assert.ok(handoff, "registers /mission-handoff");
+	const notes = [];
+	const runHandoff = () => handoff.handler("", {
+		sessionManager: { getSessionId: () => "handoff-session" },
+		ui: { notify: (msg) => notes.push(msg) },
+	});
+	await runHandoff();
+	assert.equal(sent.length, 1, "handoff sends one message to the agent");
+	assert.match(sent[0], /prev-session/, "the message names its source session");
+	assert.match(sent[0], /Leftover active work/, "unfinished work is offered");
+	assert.ok(!sent[0].includes("Leftover pending work"), "titles already on this board are skipped");
+	assert.ok(!sent[0].includes("Already finished work"), "finished work is not carried over");
+	assert.match(notes[0], /1 unfinished task from session prev-session/);
+
+	// everything already present: a no-op notice, no second agent message
+	await call({ action: "add", title: "Leftover active work" });
+	await runHandoff();
+	assert.equal(sent.length, 1, "nothing new to carry sends no message");
+	assert.match(notes[notes.length - 1], /already on this board/);
 }
 
 console.log("pi-mission selftest: all assertions passed");

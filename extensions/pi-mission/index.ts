@@ -21,7 +21,7 @@
  */
 import { DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Container, type SelectItem, SelectList, Text, type TuiMouseEvent, type TuiMouseEventResult, decodeKittyPrintable, fuzzyFilter, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -84,7 +84,41 @@ const readSnapshot = (session: string): { tasks: Task[]; nextId: number } | unde
 	return undefined;
 };
 
+/**
+ * Handoff source for /mission-handoff: the most recent other session's board
+ * that still has unfinished (pending/active) work. Boards stay session-scoped
+ * by design — this only picks the candidate; carrying tasks over is always an
+ * explicit request.
+ */
+const handoffSource = (currentSession: string): { session: string; tasks: Task[] } | undefined => {
+	try {
+		const files = readdirSync(storeDir()).filter((f) => f.endsWith(".jsonl"));
+		files.sort((a, b) =>
+			statSync(join(storeDir(), b)).mtimeMs - statSync(join(storeDir(), a)).mtimeMs ||
+			(a < b ? 1 : -1));
+		for (const f of files) {
+			const session = f.slice(0, -".jsonl".length);
+			if (session === currentSession) continue;
+			const open = (readSnapshot(session)?.tasks ?? [])
+				.filter((t) => t.status === "pending" || t.status === "active");
+			if (open.length > 0) return { session, tasks: open };
+		}
+	} catch {
+		// no store directory or unreadable entry: nothing to hand off
+	}
+	return undefined;
+};
 
+
+
+/* One entry of a batch add (tasks[]) — the same fields as a single add. */
+type AddItem = {
+	title?: string;
+	capture?: string;
+	parent?: number;
+	depends_on?: number[];
+	priority?: "high" | "normal" | "low";
+};
 
 interface MissionDetails {
 	action: MissionAction;
@@ -105,6 +139,15 @@ const MissionParams = Type.Object({
 	]),
 	title: Type.Optional(Type.String({ description: "Explicit task name (add; used as-is when given)" })),
 	capture: Type.Optional(Type.String({ description: "Raw thought when no explicit name is given (add); a concise name is generated with a bargain-tier model" })),
+	tasks: Type.Optional(Type.Array(Type.Object({
+		title: Type.Optional(Type.String({ description: "Explicit task name (used as-is when given)" })),
+		capture: Type.Optional(Type.String({ description: "Raw thought when no explicit name is given; a concise name is generated with a bargain-tier model" })),
+		parent: Type.Optional(Type.Number({ description: "Supertask id when adding a subtask" })),
+		depends_on: Type.Optional(Type.Array(Type.Number(), { description: "Ids that must be done first" })),
+		priority: Type.Optional(Type.Union([Type.Literal("high"), Type.Literal("normal"), Type.Literal("low")],
+			{ description: "Task priority (default normal)" })),
+	}), { description: "Add several tasks in one call (add); one entry per task, ids assigned in order. " +
+		"Prerequisite ids must already exist on the board — use dep afterwards to link tasks added together" })),
 	id: Type.Optional(Type.Number({ description: "Task id (dep/prio/start/done/drop)" })),
 	parent: Type.Optional(Type.Number({ description: "Supertask id when adding a subtask (add)" })),
 	depends_on: Type.Optional(Type.Array(Type.Number(), { description: "Ids that must be done first (add/dep)" })),
@@ -736,7 +779,7 @@ export default function (pi: ExtensionAPI) {
 			"apply them exactly. " +
 			"Actions: add (title? for an explicit name, or capture? with a raw thought — a concise " +
 			"name is generated with a bargain-tier model; parent? for a subtask, depends_on? for prerequisites, " +
-			"priority? high/normal/low), " +
+			"priority? high/normal/low; tasks? adds several in one call — one entry per task), " +
 			"dep (id, depends_on — set prerequisites, rejects cycles), " +
 			"prio (id, priority — high/normal/low), " +
 			"start (id), done (id), drop (id), list. " +
@@ -759,41 +802,58 @@ export default function (pi: ExtensionAPI) {
 
 			switch (params.action) {
 				case "add": {
-					const capture = params.capture?.trim();
-					if (!params.title && !capture) {
-						return snapshot("add", "Error: title or capture required for add", "title or capture required");
+					// One item or many (tasks[]): the same shape per item. The batch is
+					// validated up front so a bad item never half-applies it.
+					const items: AddItem[] = params.tasks && params.tasks.length > 0
+						? params.tasks as AddItem[]
+						: [{ title: params.title, capture: params.capture, parent: params.parent,
+							depends_on: params.depends_on, priority: params.priority }];
+					for (const [n, item] of items.entries()) {
+						const where = items.length > 1 ? ` (task ${n + 1})` : "";
+						if (!item.title && !item.capture?.trim()) {
+							return snapshot("add", `Error: title or capture required${where}`, "title or capture required");
+						}
+						if (item.parent !== undefined) {
+							const p = findTask(tasks, item.parent);
+							if (!p || p.parent !== null) {
+								return snapshot("add", `Error: parent #${item.parent} must be an existing top-level task${where}`, "bad parent");
+							}
+						}
+						for (const d of item.depends_on ?? []) {
+							// A brand-new task cannot close a cycle, so existence is the only check.
+							if (!findTask(tasks, d)) {
+								return snapshot("add", `Error: unknown prerequisite #${d}${where}`, `unknown prerequisite #${d}`);
+							}
+						}
 					}
-					const parent = params.parent !== undefined ? findTask(tasks, params.parent) : undefined;
-					if (params.parent !== undefined && (!parent || parent.parent !== null)) {
-						return snapshot("add", `Error: parent #${params.parent} must be an existing top-level task`, "bad parent");
-					}
-					// Explicit name wins. Otherwise a bargain-tier model names the capture.
-					let title = params.title ?? "";
 					let usage: AgentToolResult<never>["usage"];
-					if (!title) {
-						const named = await generateName(_ctx, capture as string, tasks.map((t) => t.title));
-						title = named.title;
-						usage = named.usage;
+					const notes: string[] = [];
+					for (const item of items) {
+						// Explicit name wins. Otherwise a bargain-tier model names the capture.
+						let title = item.title ?? "";
+						if (!title) {
+							const named = await generateName(_ctx, (item.capture as string).trim(), tasks.map((t) => t.title));
+							title = named.title;
+							usage = named.usage ?? usage;
+						}
+						const parent = item.parent !== undefined ? findTask(tasks, item.parent) : undefined;
+						const task: Task = {
+							id: nextId++,
+							title,
+							status: "pending",
+							priority: item.priority,
+							parent: parent ? parent.id : null,
+							dependsOn: [...new Set(item.depends_on ?? [])],
+							createdAt: Date.now(),
+							updatedAt: Date.now(),
+						};
+						tasks.push(task);
+						notes.push(`${parent ? "subtask" : "task"} #${task.id}: ${task.title}${item.title ? "" : " (named from capture)"}`);
 					}
-					const task: Task = {
-						id: nextId++,
-						title,
-						status: "pending",
-						priority: params.priority,
-						parent: parent ? parent.id : null,
-						dependsOn: [],
-						createdAt: Date.now(),
-						updatedAt: Date.now(),
-					};
-					const err = setDeps(task, params.depends_on ?? []);
-					if (err) {
-						nextId--;
-						return snapshot("add", `Error: ${err}`, err);
-					}
-					tasks.push(task);
 					persist(_ctx);
-					const namedNote = params.title ? "" : " (named from capture)";
-					const result = snapshot("add", `Added ${parent ? "subtask" : "task"} #${task.id}: ${task.title}${namedNote}`);
+					const result = notes.length === 1
+						? snapshot("add", `Added ${notes[0]}`)
+						: snapshot("add", `Added ${notes.length} tasks: ${notes.join("; ")}`);
 					return usage ? { ...result, usage } : result;
 				}
 
@@ -872,6 +932,7 @@ export default function (pi: ExtensionAPI) {
 		renderCall(args, theme, _context) {
 			let text = theme.fg("toolTitle", theme.bold("mission ")) + theme.fg("muted", String(args.action));
 			if (args.title) text += ` ${theme.fg("dim", `"${args.title}"`)}`;
+			if (args.tasks?.length) text += ` ${theme.fg("dim", `+${args.tasks.length}`)}`;
 			if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
 			return new Text(text, 0, 0);
 		},
@@ -965,6 +1026,35 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("mission", {
 		description: "Show the mission list popup: current work, what was done, and remaining tasks in dependency order",
 		handler: async (_args, ctx) => openBoard(ctx),
+	});
+
+	// Carrying unfinished work over from a previous session is explicit and
+	// user-driven. The command only composes the request; the agent makes the one
+	// batch add, so the change lands in a tool result and survives branch replay.
+	pi.registerCommand("mission-handoff", {
+		description: "Carry over the previous session's unfinished tasks to this session's board",
+		handler: async (_args, ctx) => {
+			const source = handoffSource(ctx.sessionManager.getSessionId());
+			if (!source) {
+				ctx.ui.notify("No unfinished tasks in earlier session boards", "info");
+				return;
+			}
+			const open = source.tasks.filter((t) => !tasks.some((s) => s.title === t.title));
+			if (open.length === 0) {
+				ctx.ui.notify(`Session ${source.session}'s unfinished tasks are already on this board`, "info");
+				return;
+			}
+			await pi.sendUserMessage(
+				`Mission: add the unfinished tasks of session ${source.session} to this board with one ` +
+				`batch add (mission action add, tasks: [{ title }, …]): ` +
+				open.map((t) => `#${t.id} ${JSON.stringify(t.title)} (${t.status})`).join(", ") +
+				` — source: ${join(storeDir(), `${source.session}.jsonl`)}`,
+			);
+			ctx.ui.notify(
+				`Sent to the agent: ${open.length} unfinished task${open.length === 1 ? "" : "s"} from session ${source.session}`,
+				"info",
+			);
+		},
 	});
 
 	// ⌃K is taken (tui.editor.deleteToLineEnd). ⌥M matches the extension name;
