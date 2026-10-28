@@ -507,12 +507,21 @@ assert.deepEqual(mod.menuActions("dropped"), []);
 	assert.match(prompt, /plain verb/, "plain-verb rule steers the name");
 }
 
-// 10) handoff: unfinished tasks from the most recent previous board arrive as
-//     one agent message; titles already on this board and finished work stay out
+// 10) handoff: unfinished tasks from every earlier board with leftovers arrive
+//     as one agent message; titles already on this board, duplicate titles
+//     already offered by a newer board, and finished work stay out
 {
 	const boot = (id) => handlers.session_start(null, {
 		sessionManager: { getSessionId: () => id, getBranch: () => [] },
 	});
+	fs.rmSync(storeDir, { recursive: true, force: true }); // earlier blocks' boards must not leak in
+	currentSession = "older-session";
+	boot("older-session");
+	await call({ action: "add", title: "Ancient pending work" });
+	await call({ action: "add", title: "Leftover active work" }); // duplicate of prev-session's; newer board wins
+	const bumpOld = new Date(Date.now() + 30_000);
+	fs.utimesSync(path.join(storeDir, "older-session.jsonl"), bumpOld, bumpOld);
+
 	currentSession = "prev-session";
 	boot("prev-session");
 	await call({ action: "add", title: "Leftover pending work" });
@@ -540,13 +549,18 @@ assert.deepEqual(mod.menuActions("dropped"), []);
 	await runHandoff();
 	assert.equal(sent.length, 1, "handoff sends one message to the agent");
 	assert.match(sent[0], /prev-session/, "the message names its source session");
+	assert.match(sent[0], /older-session/, "older leftover boards are carried too");
 	assert.match(sent[0], /Leftover active work/, "unfinished work is offered");
+	assert.match(sent[0], /Ancient pending work/, "older unfinished work is offered");
+	assert.equal(sent[0].split("Leftover active work").length - 1, 1,
+		"duplicate titles are carried once, newest board wins");
 	assert.ok(!sent[0].includes("Leftover pending work"), "titles already on this board are skipped");
 	assert.ok(!sent[0].includes("Already finished work"), "finished work is not carried over");
-	assert.match(notes[0], /1 unfinished task from session prev-session/);
+	assert.match(notes[0], /2 unfinished tasks from sessions prev-session, older-session/);
 
 	// everything already present: a no-op notice, no second agent message
 	await call({ action: "add", title: "Leftover active work" });
+	await call({ action: "add", title: "Ancient pending work" });
 	await runHandoff();
 	assert.equal(sent.length, 1, "nothing new to carry sends no message");
 	assert.match(notes[notes.length - 1], /already on this board/);

@@ -85,12 +85,14 @@ const readSnapshot = (session: string): { tasks: Task[]; nextId: number } | unde
 };
 
 /**
- * Handoff source for /mission-handoff: the most recent other session's board
- * that still has unfinished (pending/active) work. Boards stay session-scoped
- * by design — this only picks the candidate; carrying tasks over is always an
- * explicit request.
+ * Handoff sources for /mission-handoff: every earlier session board that still
+ * has unfinished (pending/active) work, newest first. Boards stay
+ * session-scoped by design — this only gathers the candidates; carrying tasks
+ * over is always an explicit request.
  */
-const handoffSource = (currentSession: string): { session: string; tasks: Task[] } | undefined => {
+const handoffSources = (currentSession: string): { session: string; tasks: Task[] }[] => {
+	const out: { session: string; tasks: Task[] }[] = [];
+	const seen = new Set<string>();
 	try {
 		const files = readdirSync(storeDir()).filter((f) => f.endsWith(".jsonl"));
 		files.sort((a, b) =>
@@ -99,14 +101,16 @@ const handoffSource = (currentSession: string): { session: string; tasks: Task[]
 		for (const f of files) {
 			const session = f.slice(0, -".jsonl".length);
 			if (session === currentSession) continue;
+			// a newer board's copy of a title wins over an older one's
 			const open = (readSnapshot(session)?.tasks ?? [])
-				.filter((t) => t.status === "pending" || t.status === "active");
-			if (open.length > 0) return { session, tasks: open };
+				.filter((t) => (t.status === "pending" || t.status === "active") && !seen.has(t.title));
+			for (const t of open) seen.add(t.title);
+			if (open.length > 0) out.push({ session, tasks: open });
 		}
 	} catch {
 		// no store directory or unreadable entry: nothing to hand off
 	}
-	return undefined;
+	return out;
 };
 
 
@@ -1032,26 +1036,33 @@ export default function (pi: ExtensionAPI) {
 	// user-driven. The command only composes the request; the agent makes the one
 	// batch add, so the change lands in a tool result and survives branch replay.
 	pi.registerCommand("mission-handoff", {
-		description: "Carry over the previous session's unfinished tasks to this session's board",
+		description: "Carry over earlier sessions' unfinished tasks to this session's board",
 		handler: async (_args, ctx) => {
-			const source = handoffSource(ctx.sessionManager.getSessionId());
-			if (!source) {
+			const found = handoffSources(ctx.sessionManager.getSessionId());
+			if (found.length === 0) {
 				ctx.ui.notify("No unfinished tasks in earlier session boards", "info");
 				return;
 			}
-			const open = source.tasks.filter((t) => !tasks.some((s) => s.title === t.title));
-			if (open.length === 0) {
-				ctx.ui.notify(`Session ${source.session}'s unfinished tasks are already on this board`, "info");
+			const onBoard = new Set(tasks.map((t) => t.title));
+			const sources = found
+				.map((s) => ({ session: s.session, tasks: s.tasks.filter((t) => !onBoard.has(t.title)) }))
+				.filter((s) => s.tasks.length > 0);
+			if (sources.length === 0) {
+				ctx.ui.notify("Earlier sessions' unfinished tasks are already on this board", "info");
 				return;
 			}
+			const open = sources.flatMap((s) => s.tasks);
 			await pi.sendUserMessage(
-				`Mission: add the unfinished tasks of session ${source.session} to this board with one ` +
+				`Mission: add the unfinished tasks of earlier sessions to this board with one ` +
 				`batch add (mission action add, tasks: [{ title }, …]): ` +
-				open.map((t) => `#${t.id} ${JSON.stringify(t.title)} (${t.status})`).join(", ") +
-				` — source: ${join(storeDir(), `${source.session}.jsonl`)}`,
+				sources.flatMap((s) =>
+					s.tasks.map((t) => `#${t.id} ${JSON.stringify(t.title)} (${t.status}) from session ${s.session}`),
+				).join(", ") +
+				` — sources: ${sources.map((s) => join(storeDir(), `${s.session}.jsonl`)).join(", ")}`,
 			);
 			ctx.ui.notify(
-				`Sent to the agent: ${open.length} unfinished task${open.length === 1 ? "" : "s"} from session ${source.session}`,
+				`Sent to the agent: ${open.length} unfinished task${open.length === 1 ? "" : "s"} ` +
+				`from session${sources.length === 1 ? "" : "s"} ${sources.map((s) => s.session).join(", ")}`,
 				"info",
 			);
 		},

@@ -86,11 +86,13 @@ Carry-over happens only when the user asks ("carry over last session's
 unfinished tasks", "continue where we left off") — never automatically.
 
 - `/mission-handoff` (in a pi session) does it end to end: it sends the
-  unfinished (`pending`/`active`) tasks of the most recent previous board to
-  the agent, which adds them with one batch `add`, skipping titles already on
-  this board. The message names the source session — when interleaved projects
-  made it pick the wrong one, correct it in conversation and read the right
-  file instead.
+  unfinished (`pending`/`active`) tasks of **every** earlier board that still
+  has open work to the agent, which adds them with one batch `add`, skipping
+  titles already on this board (a newer board's copy of a title wins over an
+  older one's). A session where the handoff was forgotten therefore does not
+  shadow older leftovers. The message names each source session — when
+  interleaved projects mixed boards, correct it in conversation and read the
+  right file instead.
 - By hand: `tail -1` the previous session's file, keep tasks with status
   `pending` or `active`, skip titles already on this board, and add the rest in
   one call: `{ "action": "add", "tasks": [{ "title": "…" }, …] }`.

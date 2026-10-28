@@ -71,10 +71,12 @@ agents how to read and update these boards.
    file. The one habit worth keeping: before quitting, mark finished work done
    (or drop what you will not do) so "what is unfinished" is already curated.
 6. **Continue in a new session with `/mission-handoff`.** It carries the
-   previous session's unfinished missions over to the new board — explicitly,
-   never automatically. They enter as `pending`; work restarts here. Since
-   sessions from different projects can interleave, the handoff names its
-   source session: if it picked the wrong one, say so and name the right one.
+   unfinished missions of **all** earlier sessions that still have open work
+   over to the new board — explicitly, never automatically. A session where
+   the handoff was forgotten does not shadow older leftovers. They enter as
+   `pending`; work restarts here. Since sessions from different projects can
+   interleave, the handoff names its source sessions: if it picked up the
+   wrong project's, say so and name the right one.
 
 ## Naming model
 
@@ -134,9 +136,9 @@ The `pi-package` keyword lists the package in the
 [pi package gallery](https://pi.dev/packages). The host packages
 (`@earendil-works/*`, `typebox`) are `peerDependencies` only. pi supplies them.
 
-```bash
-npm publish --access public
-```
+Publishing is tag-driven: push a `v*` tag matching `package.json`'s version
+(e.g. `v0.2.1`) and the `npm publish` GitHub Action runs the self-test and
+publishes to npm (`npm publish --access public` there, not locally).
 
 ## License
 
